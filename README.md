@@ -4,8 +4,13 @@ Minipileup is a simple pileup-based variant caller. It takes a reference FASTA
 and one or multiple alignment BAM as input, and outputs a multi-sample VCF along with
 allele counts:
 ```sh
-samtools faidx ref.fa       # index FASTA; bgzip'd FASTA is not supported
-minipileup -yf ref.fa -p.2 aln1.bam aln2.bam > var.vcf
+# bgzip'd FASTA is now supported!
+bgzip ref.fa && samtools faidx ref.fa.gz
+minipileup -yf ref.fa.gz -p.2 -t 4 aln1.bam aln2.bam > var.vcf
+
+# Or with regular FASTA
+samtools faidx ref.fa
+minipileup -yf ref.fa -p.2 -t 4 aln1.bam aln2.bam > var.vcf
 ```
 You can adjust mapping quality, base quality, alignment length and allele count
 thresholds, or specify regions on the command line.
@@ -19,6 +24,12 @@ but minipileup is faster and more convenient.
 Minipileup is adapted from the [htsbox][htsbox] pileup command which was
 initially implemented in 2012 and has been a tool I frequently use to
 investigate alignment data.
+
+## Features
+
+- **bgzip FASTA support**: Reference genome can be bgzip-compressed (.fa.gz)
+- **Multithreading**: Use `-t` option to specify number of threads for BAM decompression
+- **klib integration**: Uses kthread.c and kthread.h from klib for threading support
 
 ## Methods
 
