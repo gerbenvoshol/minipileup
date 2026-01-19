@@ -4,7 +4,7 @@ CFLAGS ?=		-g -Wall -O3
 CXXFLAGS ?=	$(CFLAGS)
 CPPFLAGS=
 INCLUDES=
-OBJS ?=		razf.o bgzf.o hts.o sam.o faidx.o bedidx.o
+OBJS ?=		razf.o bgzf.o hts.o sam.o faidx.o bedidx.o kthread.o
 PROG ?=		minipileup
 LIBS ?=		-lpthread -lz -lm
 
@@ -37,8 +37,9 @@ depend:
 
 bedidx.o: ksort.h kseq.h khash.h
 bgzf.o: bgzf.h
-faidx.o: faidx.h khash.h razf.h
+faidx.o: faidx.h khash.h razf.h bgzf.h
 hts.o: bgzf.h hts.h kseq.h khash.h ksort.h
+kthread.o: kthread.c
 pileup.o: sam.h bgzf.h hts.h faidx.h ksort.h ketopt.h
 razf.o: razf.h
 sam.o: sam.h bgzf.h hts.h khash.h kseq.h kstring.h
