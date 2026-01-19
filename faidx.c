@@ -146,6 +146,8 @@ faidx_t *fai_build_core_bgzf(BGZF *bgzf)
 
 	idx = (faidx_t*)calloc(1, sizeof(faidx_t));
 	idx->hash = kh_init(s);
+	idx->rz = NULL;
+	idx->bgzf = NULL;
 	name = 0; l_name = m_name = 0;
 	len = line_len = line_blen = -1; state = 0; l1 = l2 = -1; offset = 0;
 	while (bgzf_read(bgzf, &c, 1) > 0) {
