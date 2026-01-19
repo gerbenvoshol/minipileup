@@ -220,7 +220,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  General:\n");
 		fprintf(stderr, "    -f FILE      reference genome (supports bgzip) [null]\n");
-		fprintf(stderr, "    -t INT       number of threads for BAM decompression [%d]\n", n_threads);
+		fprintf(stderr, "    -t INT       number of threads (reserved for future use) [%d]\n", n_threads);
 		fprintf(stderr, "    -v           show variants only\n");
 		fprintf(stderr, "    -c           output in the VCF format (force -v)\n");
 		fprintf(stderr, "    -C           show count of each allele on both strands\n");
@@ -258,14 +258,6 @@ int main(int argc, char *argv[])
 		bam_hdr_t *htmp;
 		data[i] = (aux_t*)calloc(1, sizeof(aux_t));
 		data[i]->fp = bgzf_open(argv[o.ind+i], "r"); // open BAM
-#ifdef BGZF_MT
-		if (n_threads > 0) {
-			// Note: bgzf_mt is currently only effective for writing
-			// For reading, BAM decompression is still single-threaded per file
-			// Future enhancement: could use kthread to parallelize across files
-			bgzf_mt(data[i]->fp, n_threads, 256);
-		}
-#endif
 		data[i]->min_mapQ = mapQ;                     // set the mapQ filter
 		data[i]->min_len  = min_len;                  // set the qlen filter
 		data[i]->min_supp_len = min_supp_len;
