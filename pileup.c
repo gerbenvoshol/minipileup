@@ -11,7 +11,7 @@
 #include "ksort.h"
 #include "ketopt.h"
 
-#define VERSION "1.4-r19"
+#define VERSION "1.5-r20"
 
 const char *hts_parse_reg(const char *s, int *beg, int *end);
 void *bed_read(const char *fn);
@@ -171,7 +171,7 @@ static void count_alleles(paux_t *pa, int n)
 int main(int argc, char *argv[])
 {
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_support_strand = 0, min_supp_len = 0;
-	int is_vcf = 0, var_only = 0, show_2strand = 0, trim_len = 0, del_as_allele = 0, proper_only = 0;
+	int is_vcf = 0, var_only = 0, show_2strand = 0, trim_len = 0, del_as_allele = 0, proper_only = 0, n_threads = 0;
 	int last_tid;
 	double min_af = 0.0;
 	const bam_pileup1_t **plp;
@@ -186,7 +186,7 @@ int main(int argc, char *argv[])
 	ketopt_t o = KETOPT_INIT;
 
 	// parse the command line
-	while ((n = ketopt(&o, argc, argv, 1, "r:q:Q:l:f:p:vcCS:s:b:T:ea:yVP", 0)) >= 0) {
+	while ((n = ketopt(&o, argc, argv, 1, "r:q:Q:l:f:p:vcCS:s:b:T:ea:yVPt:", 0)) >= 0) {
 		if (n == 'f') { fname = o.arg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(o.arg);
 		else if (n == 'l') min_len = atoi(o.arg); // minimum query length
@@ -203,6 +203,7 @@ int main(int argc, char *argv[])
 		else if (n == 'e') del_as_allele = 1;
 		else if (n == 'p') min_af = atof(o.arg);
 		else if (n == 'P') proper_only = 1;
+		else if (n == 't') n_threads = atoi(o.arg);
 		else if (n == 'y') mapQ = 20, baseQ = 20, min_support = 5, min_support_strand = 2, is_vcf = var_only = show_2strand = 1;
 		else if (n == 'V') {
 			puts(VERSION);
@@ -218,7 +219,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Usage: minipileup [options] in1.bam [in2.bam [...]]\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  General:\n");
-		fprintf(stderr, "    -f FILE      reference genome [null]\n");
+		fprintf(stderr, "    -f FILE      reference genome (supports bgzip) [null]\n");
+		fprintf(stderr, "    -t INT       number of threads for BAM decompression [%d]\n", n_threads);
 		fprintf(stderr, "    -v           show variants only\n");
 		fprintf(stderr, "    -c           output in the VCF format (force -v)\n");
 		fprintf(stderr, "    -C           show count of each allele on both strands\n");
@@ -256,6 +258,14 @@ int main(int argc, char *argv[])
 		bam_hdr_t *htmp;
 		data[i] = (aux_t*)calloc(1, sizeof(aux_t));
 		data[i]->fp = bgzf_open(argv[o.ind+i], "r"); // open BAM
+#ifdef BGZF_MT
+		if (n_threads > 0) {
+			// Note: bgzf_mt is currently only effective for writing
+			// For reading, BAM decompression is still single-threaded per file
+			// Future enhancement: could use kthread to parallelize across files
+			bgzf_mt(data[i]->fp, n_threads, 256);
+		}
+#endif
 		data[i]->min_mapQ = mapQ;                     // set the mapQ filter
 		data[i]->min_len  = min_len;                  // set the qlen filter
 		data[i]->min_supp_len = min_supp_len;

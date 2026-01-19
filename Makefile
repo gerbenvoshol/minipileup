@@ -1,6 +1,6 @@
 CC ?=			gcc
 CXX ?=		g++
-CFLAGS ?=		-g -Wall -O3
+CFLAGS ?=		-g -Wall -O3 -DBGZF_MT
 CXXFLAGS ?=	$(CFLAGS)
 CPPFLAGS=
 INCLUDES=
