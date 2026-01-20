@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "faidx.h"
 #include "khash.h"
+#include "bgzf.h"
 
 typedef struct {
 	int32_t line_len, line_blen;
@@ -36,6 +37,7 @@ extern int fseeko(FILE *stream, off_t offset, int whence);
 
 struct __faidx_t {
 	RAZF *rz;
+	BGZF *bgzf;
 	int n, m;
 	char **name;
 	khash_t(s) *hash;
@@ -132,6 +134,79 @@ faidx_t *fai_build_core(RAZF *rz)
 	return idx;
 }
 
+faidx_t *fai_build_core_bgzf(BGZF *bgzf)
+{
+	char c, *name;
+	int l_name, m_name, ret;
+	int line_len, line_blen, state;
+	int l1, l2;
+	faidx_t *idx;
+	uint64_t offset;
+	int64_t len;
+
+	idx = (faidx_t*)calloc(1, sizeof(faidx_t));
+	idx->hash = kh_init(s);
+	idx->rz = NULL;
+	idx->bgzf = NULL;
+	name = 0; l_name = m_name = 0;
+	len = line_len = line_blen = -1; state = 0; l1 = l2 = -1; offset = 0;
+	while (bgzf_read(bgzf, &c, 1) > 0) {
+		if (c == '\n') { // an empty line
+			if (state == 1) {
+				offset = bgzf_tell(bgzf);
+				continue;
+			} else if ((state == 0 && len < 0) || state == 2) continue;
+		}
+		if (c == '>') { // fasta header
+			if (len >= 0)
+				fai_insert_index(idx, name, len, line_len, line_blen, offset);
+			l_name = 0;
+			while ((ret = bgzf_read(bgzf, &c, 1)) > 0 && !isspace(c)) {
+				if (m_name < l_name + 2) {
+					m_name = l_name + 2;
+					kroundup32(m_name);
+					name = (char*)realloc(name, m_name);
+				}
+				name[l_name++] = c;
+			}
+			name[l_name] = '\0';
+			if (ret == 0) {
+				fprintf(stderr, "[fai_build_core_bgzf] the last entry has no sequence\n");
+				free(name); fai_destroy(idx);
+				return 0;
+			}
+			if (c != '\n') while (bgzf_read(bgzf, &c, 1) > 0 && c != '\n');
+			state = 1; len = 0;
+			offset = bgzf_tell(bgzf);
+		} else {
+			if (state == 3) {
+				fprintf(stderr, "[fai_build_core_bgzf] inlined empty line is not allowed in sequence '%s'.\n", name);
+				free(name); fai_destroy(idx);
+				return 0;
+			}
+			if (state == 2) state = 3;
+			l1 = l2 = 0;
+			do {
+				++l1;
+				if (isgraph(c)) ++l2;
+			} while ((ret = bgzf_read(bgzf, &c, 1)) > 0 && c != '\n');
+			if (state == 3 && l2) {
+				fprintf(stderr, "[fai_build_core_bgzf] different line length in sequence '%s'.\n", name);
+				free(name); fai_destroy(idx);
+				return 0;
+			}
+			++l1; len += l2;
+			if (state == 1) line_len = l1, line_blen = l2, state = 0;
+			else if (state == 0) {
+				if (l1 != line_len || l2 != line_blen) state = 2;
+			}
+		}
+	}
+	fai_insert_index(idx, name, len, line_len, line_blen, offset);
+	free(name);
+	return idx;
+}
+
 void fai_save(const faidx_t *fai, FILE *fp)
 {
 	khint_t k;
@@ -182,6 +257,7 @@ void fai_destroy(faidx_t *fai)
 	free(fai->name);
 	kh_destroy(s, fai->hash);
 	if (fai->rz) razf_close(fai->rz);
+	if (fai->bgzf) bgzf_close(fai->bgzf);
 	free(fai);
 }
 
@@ -189,18 +265,37 @@ int fai_build(const char *fn)
 {
 	char *str;
 	RAZF *rz;
+	BGZF *bgzf;
 	FILE *fp;
 	faidx_t *fai;
+	int is_bgzf;
+	
 	str = (char*)calloc(strlen(fn) + 5, 1);
 	sprintf(str, "%s.fai", fn);
-	rz = razf_open(fn, "r");
-	if (rz == 0) {
-		fprintf(stderr, "[fai_build] fail to open the FASTA file %s\n",fn);
-		free(str);
-		return -1;
+	
+	// Check if the file is bgzipped
+	is_bgzf = bgzf_is_bgzf(fn);
+	
+	if (is_bgzf) {
+		bgzf = bgzf_open(fn, "r");
+		if (bgzf == 0) {
+			fprintf(stderr, "[fai_build] fail to open the FASTA file %s\n",fn);
+			free(str);
+			return -1;
+		}
+		fai = fai_build_core_bgzf(bgzf);
+		bgzf_close(bgzf);
+	} else {
+		rz = razf_open(fn, "r");
+		if (rz == 0) {
+			fprintf(stderr, "[fai_build] fail to open the FASTA file %s\n",fn);
+			free(str);
+			return -1;
+		}
+		fai = fai_build_core(rz);
+		razf_close(rz);
 	}
-	fai = fai_build_core(rz);
-	razf_close(rz);
+	
 	fp = fopen(str, "wb");
 	if (fp == 0) {
 		fprintf(stderr, "[fai_build] fail to write FASTA index %s\n",str);
@@ -260,6 +355,8 @@ faidx_t *fai_load(const char *fn)
 	char *str;
 	FILE *fp;
 	faidx_t *fai;
+	int is_bgzf;
+	
 	str = (char*)calloc(strlen(fn) + 5, 1);
 	sprintf(str, "%s.fai", fn);
 
@@ -291,11 +388,25 @@ faidx_t *fai_load(const char *fn)
 	fai = fai_read(fp);
 	fclose(fp);
 
-	fai->rz = razf_open(fn, "rb");
-	free(str);
-	if (fai->rz == 0) {
-		fprintf(stderr, "[fai_load] fail to open FASTA file.\n");
-		return 0;
+	// Check if the file is bgzipped
+	is_bgzf = bgzf_is_bgzf(fn);
+	
+	if (is_bgzf) {
+		fai->bgzf = bgzf_open(fn, "rb");
+		fai->rz = NULL;
+		free(str);
+		if (fai->bgzf == 0) {
+			fprintf(stderr, "[fai_load] fail to open bgzipped FASTA file.\n");
+			return 0;
+		}
+	} else {
+		fai->rz = razf_open(fn, "rb");
+		fai->bgzf = NULL;
+		free(str);
+		if (fai->rz == 0) {
+			fprintf(stderr, "[fai_load] fail to open FASTA file.\n");
+			return 0;
+		}
 	}
 	return fai;
 }
@@ -361,9 +472,19 @@ char *fai_fetch(const faidx_t *fai, const char *str, int *len)
 	// now retrieve the sequence
 	l = 0;
 	s = (char*)malloc(end - beg + 2);
-	razf_seek(fai->rz, val.offset + beg / val.line_blen * val.line_len + beg % val.line_blen, SEEK_SET);
-	while (razf_read(fai->rz, &c, 1) == 1 && l < end - beg && !fai->rz->z_err)
-		if (isgraph(c)) s[l++] = c;
+	
+	if (fai->bgzf) {
+		// Use bgzf for bgzipped files
+		bgzf_seek(fai->bgzf, val.offset + beg / val.line_blen * val.line_len + beg % val.line_blen, SEEK_SET);
+		while (bgzf_read(fai->bgzf, &c, 1) == 1 && l < end - beg)
+			if (isgraph(c)) s[l++] = c;
+	} else {
+		// Use razf for non-bgzipped files
+		razf_seek(fai->rz, val.offset + beg / val.line_blen * val.line_len + beg % val.line_blen, SEEK_SET);
+		while (razf_read(fai->rz, &c, 1) == 1 && l < end - beg && !fai->rz->z_err)
+			if (isgraph(c)) s[l++] = c;
+	}
+	
 	s[l] = '\0';
 	*len = l;
 	return s;
@@ -436,9 +557,19 @@ char *faidx_fetch_seq(const faidx_t *fai, char *c_name, int p_beg_i, int p_end_i
     // Now retrieve the sequence 
 	l = 0;
 	seq = (char*)malloc(p_end_i - p_beg_i + 2);
-	razf_seek(fai->rz, val.offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
-	while (razf_read(fai->rz, &c, 1) == 1 && l < p_end_i - p_beg_i + 1)
-		if (isgraph(c)) seq[l++] = c;
+	
+	if (fai->bgzf) {
+		// Use bgzf for bgzipped files
+		bgzf_seek(fai->bgzf, val.offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
+		while (bgzf_read(fai->bgzf, &c, 1) == 1 && l < p_end_i - p_beg_i + 1)
+			if (isgraph(c)) seq[l++] = c;
+	} else {
+		// Use razf for non-bgzipped files
+		razf_seek(fai->rz, val.offset + p_beg_i / val.line_blen * val.line_len + p_beg_i % val.line_blen, SEEK_SET);
+		while (razf_read(fai->rz, &c, 1) == 1 && l < p_end_i - p_beg_i + 1)
+			if (isgraph(c)) seq[l++] = c;
+	}
+	
 	seq[l] = '\0';
 	*len = l;
 	return seq;
